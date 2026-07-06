@@ -9,60 +9,91 @@ const AudioCtx = window.AudioContext || window.webkitAudioContext;
 let ctx = null;
 let voice = null;
 
+// Sax character comes from FORMANTS: a buzzy reed source pushed through a bank
+// of fixed resonant peaks (the bore/body resonances). Plus breath noise and a
+// touch of convolution reverb for air. This is much closer to a real sax than a
+// plain filtered sawtooth.
+const SAX_FORMANTS = [
+  // freq, Q,  gain (relative)
+  [ 600,  9,  1.00],
+  [ 1000, 11, 0.80],
+  [ 1700, 12, 0.55],
+  [ 2600, 10, 0.28],
+];
+
 class SaxVoice {
   constructor(ctx) {
     this.ctx = ctx;
 
-    // Two detuned saws + a square for body = reedy core
+    // --- Reed source: detuned saws through a reed-buzz waveshaper ---
     this.osc1 = ctx.createOscillator(); this.osc1.type = 'sawtooth';
-    this.osc2 = ctx.createOscillator(); this.osc2.type = 'sawtooth'; this.osc2.detune.value = 7;
-    this.osc3 = ctx.createOscillator(); this.osc3.type = 'square';   this.osc3.detune.value = -7;
+    this.osc2 = ctx.createOscillator(); this.osc2.type = 'sawtooth'; this.osc2.detune.value = 8;
+    this.osc3 = ctx.createOscillator(); this.osc3.type = 'sawtooth'; this.osc3.detune.value = -8;
 
-    this.oscMix = ctx.createGain(); this.oscMix.gain.value = 0.32;
-    this.osc1.connect(this.oscMix);
-    this.osc2.connect(this.oscMix);
-    this.osc3.connect(this.oscMix);
+    this.src = ctx.createGain(); this.src.gain.value = 0.25;
+    this.osc1.connect(this.src); this.osc2.connect(this.src); this.osc3.connect(this.src);
 
-    // Breath noise (adds realism, scaled by breath)
+    // Gentle drive gives the reed some odd-harmonic bite
+    this.drive = ctx.createWaveShaper();
+    this.drive.curve = makeDriveCurve(1.8);
+    this.src.connect(this.drive);
+
+    // Pre-emphasis highpass so low notes don't get muddy
+    this.hp = ctx.createBiquadFilter();
+    this.hp.type = 'highpass'; this.hp.frequency.value = 180;
+    this.drive.connect(this.hp);
+
+    // --- Formant bank (parallel bandpass resonators) ---
+    this.toneSum = ctx.createGain(); this.toneSum.gain.value = 1;
+    this.formants = SAX_FORMANTS.map(([f, q, g]) => {
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass'; bp.frequency.value = f; bp.Q.value = q;
+      const fg = ctx.createGain(); fg.gain.value = g;
+      this.hp.connect(bp).connect(fg).connect(this.toneSum);
+      return bp;
+    });
+    // A little direct signal keeps the body/fundamental present
+    this.direct = ctx.createGain(); this.direct.gain.value = 0.4;
+    this.hp.connect(this.direct).connect(this.toneSum);
+
+    // --- Breath noise (chiff), scaled by breath ---
     this.noise = ctx.createBufferSource();
     this.noise.buffer = makeNoiseBuffer(ctx);
     this.noise.loop = true;
     this.noiseBP = ctx.createBiquadFilter();
-    this.noiseBP.type = 'bandpass';
-    this.noiseBP.frequency.value = 2200;
-    this.noiseBP.Q.value = 0.7;
+    this.noiseBP.type = 'bandpass'; this.noiseBP.frequency.value = 2400; this.noiseBP.Q.value = 0.6;
     this.noiseGain = ctx.createGain(); this.noiseGain.gain.value = 0;
-    this.noise.connect(this.noiseBP).connect(this.noiseGain);
+    this.noise.connect(this.noiseBP).connect(this.noiseGain).connect(this.toneSum);
 
-    // Tone-shaping lowpass (brightness follows breath)
-    this.filter = ctx.createBiquadFilter();
-    this.filter.type = 'lowpass';
-    this.filter.Q.value = 5;
-    this.filter.frequency.value = 1200;
+    // --- Brightness lowpass (opens with breath) ---
+    this.bright = ctx.createBiquadFilter();
+    this.bright.type = 'lowpass'; this.bright.Q.value = 0.7; this.bright.frequency.value = 1400;
+    this.toneSum.connect(this.bright);
 
-    // Formant peak for that nasal sax honk
-    this.formant = ctx.createBiquadFilter();
-    this.formant.type = 'peaking';
-    this.formant.frequency.value = 1100;
-    this.formant.Q.value = 1.4;
-    this.formant.gain.value = 8;
-
-    this.oscMix.connect(this.filter);
-    this.noiseGain.connect(this.filter);
-    this.filter.connect(this.formant);
-
-    // Amplitude envelope (breath)
+    // --- Amplitude envelope (breath) ---
     this.amp = ctx.createGain(); this.amp.gain.value = 0;
-    this.formant.connect(this.amp);
+    this.bright.connect(this.amp);
 
-    // Master + soft saturation
+    // --- Soft clip -> dry + reverb -> master ---
     this.shaper = ctx.createWaveShaper();
-    this.shaper.curve = makeSoftClip();
-    this.master = ctx.createGain(); this.master.gain.value = 0.85;
-    this.amp.connect(this.shaper).connect(this.master).connect(ctx.destination);
+    this.shaper.curve = makeDriveCurve(1.4);
+    this.amp.connect(this.shaper);
 
-    // Vibrato LFO -> pitch
-    this.lfo = ctx.createOscillator(); this.lfo.frequency.value = 5.2;
+    this.dry = ctx.createGain(); this.dry.gain.value = 0.82;
+    this.wet = ctx.createGain(); this.wet.gain.value = 0.30;
+    this.reverb = ctx.createConvolver();
+    this.reverb.buffer = makeImpulse(ctx, 1.5, 3.2);
+
+    this.shaper.connect(this.dry);
+    this.shaper.connect(this.reverb).connect(this.wet);
+
+    this.master = ctx.createGain(); this.master.gain.value = 0.9;
+    this.dry.connect(this.master);
+    this.wet.connect(this.master);
+    this.master.connect(ctx.destination);
+
+    // --- Vibrato ---
+    this.lfo = ctx.createOscillator(); this.lfo.frequency.value = 5.0;
     this.lfoGain = ctx.createGain(); this.lfoGain.gain.value = 0;
     this.lfo.connect(this.lfoGain);
     this.lfoGain.connect(this.osc1.detune);
@@ -75,7 +106,7 @@ class SaxVoice {
     this.setFreq(this.freq, 0);
   }
 
-  setFreq(f, glide = 0.03) {
+  setFreq(f, glide = 0.025) {
     const t = this.ctx.currentTime;
     this.freq = f;
     this.osc1.frequency.setTargetAtTime(f, t, glide);
@@ -86,15 +117,16 @@ class SaxVoice {
   // breath: 0..1
   setBreath(b) {
     const t = this.ctx.currentTime;
-    const tc = 0.02;
+    // slightly slower attack than release feels more like air building
+    const tc = b > 0.01 ? 0.04 : 0.08;
     this.amp.gain.setTargetAtTime(b * 0.9, t, tc);
     // brightness opens up with breath and note pitch
-    const cutoff = Math.min(9000, 350 + this.freq * 2.2 + b * 3600);
-    this.filter.frequency.setTargetAtTime(cutoff, t, tc);
-    // breath noise
-    this.noiseGain.gain.setTargetAtTime(b > 0.02 ? 0.05 + b * 0.05 : 0, t, tc);
+    const cutoff = Math.min(9000, 500 + this.freq * 1.8 + b * 4200);
+    this.bright.frequency.setTargetAtTime(cutoff, t, 0.05);
+    // breath noise: a chiff on onset, easing off as the tone settles
+    this.noiseGain.gain.setTargetAtTime(b > 0.02 ? 0.03 + b * 0.05 : 0, t, 0.05);
     // vibrato deepens as you push
-    this.lfoGain.gain.setTargetAtTime(b * 14, t, 0.1);
+    this.lfoGain.gain.setTargetAtTime(b * 12, t, 0.12);
   }
 }
 
@@ -106,11 +138,24 @@ function makeNoiseBuffer(ctx) {
   return buf;
 }
 
-function makeSoftClip() {
+// Convolution reverb impulse: exponentially-decaying noise.
+function makeImpulse(ctx, seconds, decay) {
+  const rate = ctx.sampleRate, len = Math.floor(rate * seconds);
+  const buf = ctx.createBuffer(2, len, rate);
+  for (let c = 0; c < 2; c++) {
+    const d = buf.getChannelData(c);
+    for (let i = 0; i < len; i++) {
+      d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+    }
+  }
+  return buf;
+}
+
+function makeDriveCurve(amount) {
   const n = 1024, curve = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     const x = (i / (n - 1)) * 2 - 1;
-    curve[i] = Math.tanh(x * 1.6);
+    curve[i] = Math.tanh(x * amount) / Math.tanh(amount);
   }
   return curve;
 }
@@ -259,32 +304,51 @@ function bindKeys() {
 }
 
 /* ---------- Motion: tilt-to-blow ---------- */
-// We measure gravity along the screen normal (z). Reclining the phone's top
-// backwards (screen toward ceiling) increases az -> more breath.
-let restAz = null;
-let smoothAz = 0;
-const DEADZONE = 1.0;   // m/s^2 of tilt before any sound
-const SPAN = 5.0;       // m/s^2 range from silent -> full blow
+// Breath = how far the phone has tilted AWAY from its calibrated rest pose, in
+// any direction. We compare the current gravity direction to the rest gravity
+// direction and use the angle between them. This is direction-agnostic, so
+// whichever way you tilt from "reading" position (e.g. pushing the top up), it
+// blows — there's no signed axis to get backwards.
+let restVec = null;                 // normalized gravity vector at rest
+const grav = { x: 0, y: 0, z: 0 };  // smoothed gravity
+let haveGravity = false;
+const DEAD_DEG = 5;                 // degrees of slop before any sound
+const SPAN_DEG = 30;                // degrees from silent -> full blow
+
+function normalize(v) {
+  const m = Math.hypot(v.x, v.y, v.z) || 1;
+  return { x: v.x / m, y: v.y / m, z: v.z / m };
+}
 
 function onMotion(e) {
   const a = e.accelerationIncludingGravity;
-  if (!a || a.z == null) return;
-  smoothAz = smoothAz * 0.8 + a.z * 0.2;
-  if (restAz == null) {
+  if (!a || a.x == null) return;
+  grav.x = grav.x * 0.82 + a.x * 0.18;
+  grav.y = grav.y * 0.82 + a.y * 0.18;
+  grav.z = grav.z * 0.82 + a.z * 0.18;
+  haveGravity = true;
+
+  if (!restVec) {
     motionStatus.textContent = 'tilt: ready — Calibrate';
     return;
   }
-  const delta = smoothAz - restAz;
-  motionBreath = clamp((delta - DEADZONE) / SPAN, 0, 1);
+  const cur = normalize(grav);
+  const dot = clamp(cur.x * restVec.x + cur.y * restVec.y + cur.z * restVec.z, -1, 1);
+  const angle = Math.acos(dot) * 180 / Math.PI;
+  motionBreath = clamp((angle - DEAD_DEG) / (SPAN_DEG - DEAD_DEG), 0, 1);
   motionStatus.textContent = `tilt: ${(motionBreath * 100).toFixed(0)}%`;
 }
 
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
 function calibrate() {
-  restAz = smoothAz;
+  if (!haveGravity) {           // no sensor data yet — don't lock a bogus rest
+    motionStatus.textContent = 'tilt: waiting for sensor…';
+    return;
+  }
+  restVec = normalize(grav);
   motionBreath = 0;
-  motionStatus.textContent = 'tilt: calibrated ✓';
+  motionStatus.textContent = 'tilt: calibrated ✓ — push up to blow';
 }
 
 async function enableMotion() {
