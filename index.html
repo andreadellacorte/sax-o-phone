@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#1a1207" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Sax-o-Phone 🎷</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Start overlay: needed for audio + motion permission (must be a user gesture) -->
+  <div id="startScreen" class="overlay">
+    <div class="start-card">
+      <div class="logo">🎷</div>
+      <h1>Sax-o-Phone</h1>
+      <p class="tagline">A saxophone you play by tilting your phone.</p>
+      <ol class="howto">
+        <li>Tap <b>Start</b> (enables sound &amp; motion).</li>
+        <li>Hold the phone at a comfy rest angle, tap <b>Calibrate</b>.</li>
+        <li>Press the keys to finger a note, then <b>tilt the top of the phone up</b> to blow.</li>
+        <li>No motion sensor? Use the big <b>BLOW</b> pad instead.</li>
+      </ol>
+      <button id="startBtn" class="big-btn">▶ Start</button>
+    </div>
+  </div>
+
+  <div id="app" class="app hidden">
+    <!-- Top bar -->
+    <header class="topbar">
+      <div class="brand">🎷 Sax-o-Phone</div>
+      <div class="controls">
+        <select id="instrument" title="Instrument">
+          <option value="-9">Alto</option>
+          <option value="-14">Tenor</option>
+          <option value="-2">Soprano</option>
+          <option value="-21">Baritone</option>
+        </select>
+        <button id="calibrateBtn" class="pill">Calibrate rest</button>
+        <button id="blowMode" class="pill" title="Toggle how you blow">Tilt: on</button>
+      </div>
+    </header>
+
+    <!-- Breath meter + current note -->
+    <div class="statusrow">
+      <div class="note-display"><span id="noteName">—</span></div>
+      <div class="meter"><div id="meterFill" class="meter-fill"></div></div>
+      <div id="motionStatus" class="motion-status">tilt: not ready</div>
+    </div>
+
+    <!-- The instrument -->
+    <main class="keyboard">
+      <!-- LEFT HAND -->
+      <section class="hand left">
+        <div class="hand-label">L</div>
+        <button class="key octave" data-key="oct"><span>Octave</span></button>
+        <button class="key main" data-key="L1"><span>1</span></button>
+        <button class="key main" data-key="L2"><span>2</span></button>
+        <button class="key main" data-key="L3"><span>3</span></button>
+        <div class="pinky-cluster">
+          <button class="key pinky" data-key="lowBb"><span>♭B</span></button>
+          <button class="key pinky" data-key="lowB"><span>B</span></button>
+          <button class="key pinky" data-key="gsharp"><span>G♯</span></button>
+          <button class="key pinky" data-key="lowCsharp"><span>C♯</span></button>
+        </div>
+      </section>
+
+      <!-- BLOW PAD (fallback / always available) -->
+      <section class="blow">
+        <button id="blowPad" class="blow-pad"><span>BLOW</span></button>
+      </section>
+
+      <!-- RIGHT HAND -->
+      <section class="hand right">
+        <div class="hand-label">R</div>
+        <button class="key side" data-key="fsharp"><span>F♯</span></button>
+        <button class="key main" data-key="R1"><span>1</span></button>
+        <button class="key main" data-key="R2"><span>2</span></button>
+        <button class="key main" data-key="R3"><span>3</span></button>
+        <div class="pinky-cluster">
+          <button class="key pinky" data-key="lowEb"><span>E♭</span></button>
+          <button class="key pinky" data-key="lowC"><span>C</span></button>
+        </div>
+      </section>
+    </main>
+
+    <footer class="hint">
+      Multi-touch: press several keys at once. Fork &amp; low-note keys included.
+      <a href="#" id="showChart">Fingering chart</a>
+    </footer>
+  </div>
+
+  <!-- Fingering chart modal -->
+  <div id="chartModal" class="overlay hidden">
+    <div class="start-card chart">
+      <h2>Fingerings (written)</h2>
+      <p class="small">Numbers = which hand's holes are closed (1=index, 2=middle, 3=ring). Octave key raises an octave.</p>
+      <table>
+        <tr><th>Note</th><th>Left</th><th>Right</th></tr>
+        <tr><td>C♯</td><td>—</td><td>—</td></tr>
+        <tr><td>C</td><td>2</td><td>—</td></tr>
+        <tr><td>B</td><td>1</td><td>—</td></tr>
+        <tr><td>A</td><td>1 2</td><td>—</td></tr>
+        <tr><td>G</td><td>1 2 3</td><td>—</td></tr>
+        <tr><td>F♯</td><td>1 2 3</td><td>1 3 (fork) or F♯ key</td></tr>
+        <tr><td>F</td><td>1 2 3</td><td>1</td></tr>
+        <tr><td>E</td><td>1 2 3</td><td>1 2</td></tr>
+        <tr><td>D</td><td>1 2 3</td><td>1 2 3</td></tr>
+        <tr><td>Low C♯/C/B/♭B</td><td>1 2 3 + pinky</td><td>1 2 3</td></tr>
+        <tr><td>E♭</td><td>1 2 3</td><td>1 2 3 + E♭</td></tr>
+      </table>
+      <button id="closeChart" class="big-btn">Got it</button>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
